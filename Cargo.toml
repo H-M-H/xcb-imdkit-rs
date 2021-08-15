@@ -1,0 +1,23 @@
+[package]
+name = "xcb-imdkit"
+version = "0.1.0"
+edition = "2018"
+
+[lib]
+name = "xcb_imdkit"
+path = "src/lib.rs"
+
+[[example]]
+name = "example"
+path = "examples/example.rs"
+
+
+[dependencies]
+xcb = "0.9.0"
+lazy_static = "1.4.0"
+
+
+[build-dependencies]
+bindgen = "0.59"
+cc = "1.0"
+pkg-config = "0.3.19"
