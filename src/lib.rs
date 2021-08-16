@@ -40,8 +40,7 @@ extern "C" fn open_callback(im: *mut xcb_xim_t, user_data: *mut c_void) {
     let ic = unsafe { &mut *(user_data as *mut Ic) };
     let input_style = _xcb_im_style_t_XCB_IM_PreeditPosition
         | _xcb_im_style_t_XCB_IM_StatusArea
-        | _xcb_im_style_t_XCB_IM_PreeditCallbacks
-        | _xcb_im_style_t_XCB_IM_PreeditPosition;
+        | _xcb_im_style_t_XCB_IM_PreeditCallbacks;
     let spot = xcb_point_t { x: 0, y: 0 };
     let w = &mut ic.win as *mut _;
     unsafe {
