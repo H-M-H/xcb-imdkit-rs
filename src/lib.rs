@@ -38,7 +38,10 @@ extern "C" fn create_ic_callback(im: *mut xcb_xim_t, new_ic: xcb_xic_t, user_dat
 
 extern "C" fn open_callback(im: *mut xcb_xim_t, user_data: *mut c_void) {
     let ic = unsafe { &mut *(user_data as *mut Ic) };
-    let input_style = _xcb_im_style_t_XCB_IM_PreeditPosition | _xcb_im_style_t_XCB_IM_StatusArea;
+    let input_style = _xcb_im_style_t_XCB_IM_PreeditPosition
+        | _xcb_im_style_t_XCB_IM_StatusArea
+        | _xcb_im_style_t_XCB_IM_PreeditCallbacks
+        | _xcb_im_style_t_XCB_IM_PreeditPosition;
     let spot = xcb_point_t { x: 0, y: 0 };
     let w = &mut ic.win as *mut _;
     unsafe {
@@ -66,6 +69,28 @@ extern "C" fn open_callback(im: *mut xcb_xim_t, user_data: *mut c_void) {
     }
 }
 
+unsafe fn xim_encoding_to_utf8(
+    im: *mut xcb_xim_t,
+    xim_str: *const c_char,
+    length: usize,
+) -> String {
+    let mut buf: Vec<u8> = vec![];
+    if xcb_xim_get_encoding(im) == _xcb_xim_encoding_t_XCB_XIM_UTF8_STRING {
+        buf.extend(std::slice::from_raw_parts(
+            xim_str as *const u8,
+            length as usize,
+        ));
+    } else if xcb_xim_get_encoding(im) == _xcb_xim_encoding_t_XCB_XIM_COMPOUND_TEXT {
+        let mut new_length = 0usize;
+        let utf8 = xcb_compound_text_to_utf8(xim_str, length as usize, &mut new_length);
+        if !utf8.is_null() {
+            buf.extend(std::slice::from_raw_parts(utf8 as _, new_length));
+            free(utf8 as _);
+        }
+    }
+    String::from_utf8_lossy(&buf).into()
+}
+
 extern "C" fn commit_string_callback(
     im: *mut xcb_xim_t,
     _ic: xcb_xic_t,
@@ -76,28 +101,10 @@ extern "C" fn commit_string_callback(
     _n_keysym: usize,
     user_data: *mut c_void,
 ) {
-    let mut buf: Vec<u8> = vec![];
-    unsafe {
-        if xcb_xim_get_encoding(im) == _xcb_xim_encoding_t_XCB_XIM_UTF8_STRING {
-            buf.extend(std::slice::from_raw_parts(
-                input as _,
-                (length + 1) as usize,
-            ));
-        } else if xcb_xim_get_encoding(im) == _xcb_xim_encoding_t_XCB_XIM_COMPOUND_TEXT {
-            let mut new_length = 0usize;
-            let utf8 = xcb_compound_text_to_utf8(input, length as usize, &mut new_length);
-            if !utf8.is_null() {
-                buf.extend(std::slice::from_raw_parts(utf8 as _, new_length + 1));
-                free(utf8 as _);
-            } else {
-                buf.push(b'\0');
-            }
-        }
-    }
-    let input = unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(&buf) }.to_string_lossy();
+    let input = unsafe { xim_encoding_to_utf8(im, input, length as usize) };
     let ime = unsafe { &mut *(user_data as *mut Ime) };
     let win = ime.ic.as_ref().unwrap().win;
-    ime.callbacks.commit_string.as_mut().map(|f| f(win, input));
+    ime.callbacks.commit_string.as_mut().map(|f| f(win, &input));
 }
 
 extern "C" fn forward_event_callback(
@@ -113,19 +120,96 @@ extern "C" fn forward_event_callback(
     std::mem::forget(event);
 }
 
-type StringCB = dyn for<'a> FnMut(u32, Cow<'a, str>);
+extern "C" fn preedit_start_callback(_im: *mut xcb_xim_t, _ic: xcb_xic_t, user_data: *mut c_void) {
+    let ime = unsafe { &mut *(user_data as *mut Ime) };
+    let win = ime.ic.as_ref().unwrap().win;
+    ime.callbacks.preedit_start.as_mut().map(|f| f(win));
+}
+
+extern "C" fn preedit_draw_callback(
+    im: *mut xcb_xim_t,
+    _ic: xcb_xic_t,
+    frame: *mut xcb_im_preedit_draw_fr_t,
+    user_data: *mut c_void,
+) {
+    let frame = unsafe { &*frame };
+    let preedit_info = PreeditInfo { inner: frame, im };
+    let ime = unsafe { &mut *(user_data as *mut Ime) };
+    let win = ime.ic.as_ref().unwrap().win;
+    ime.callbacks
+        .preedit_draw
+        .as_mut()
+        .map(|f| f(win, preedit_info));
+}
+
+extern "C" fn preedit_done_callback(_im: *mut xcb_xim_t, _ic: xcb_xic_t, user_data: *mut c_void) {
+    let ime = unsafe { &mut *(user_data as *mut Ime) };
+    let win = ime.ic.as_ref().unwrap().win;
+    ime.callbacks.preedit_done.as_mut().map(|f| f(win));
+}
+
+type StringCB = dyn for<'a> FnMut(u32, &'a str);
 type KeyPressCB = dyn for<'a> FnMut(&'a xcb::KeyPressEvent);
+type PreeditDrawCB = dyn for<'a> FnMut(u32, PreeditInfo<'a>);
+type NotifyCB = dyn FnMut(u32);
 
 #[derive(Default)]
 struct Callbacks {
     commit_string: Option<Box<StringCB>>,
     forward_event: Option<Box<KeyPressCB>>,
+    preedit_start: Option<Box<NotifyCB>>,
+    preedit_draw: Option<Box<PreeditDrawCB>>,
+    preedit_done: Option<Box<NotifyCB>>,
 }
 
 #[derive(Debug, Clone)]
 struct Ic {
     win: u32,
     ic: xcb_xic_t,
+}
+
+pub struct PreeditInfo<'a> {
+    im: *mut xcb_xim_t,
+    inner: &'a xcb_im_preedit_draw_fr_t,
+}
+
+impl<'a> PreeditInfo<'a> {
+    pub fn test(&self) {
+        self.inner.chg_first;
+    }
+    pub fn status(&self) -> u32 {
+        self.inner.status
+    }
+    pub fn caret(&self) -> u32 {
+        self.inner.caret
+    }
+    pub fn chg_first(&self) -> u32 {
+        self.inner.chg_first
+    }
+    pub fn chg_length(&self) -> u32 {
+        self.inner.chg_length
+    }
+    pub fn text(&self) -> String {
+        unsafe {
+            xim_encoding_to_utf8(
+                self.im,
+                self.inner.preedit_string as _,
+                self.inner.length_of_preedit_string as usize,
+            )
+        }
+    }
+}
+
+impl<'a> std::fmt::Debug for PreeditInfo<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreeditInfo")
+            .field("status", &self.status())
+            .field("caret", &self.caret())
+            .field("chg_first", &self.chg_first())
+            .field("chg_length", &self.chg_length())
+            .field("text", &self.text());
+        Ok(())
+    }
 }
 
 pub struct Ime {
@@ -173,6 +257,9 @@ impl Ime {
         let callbacks = xcb_xim_im_callback {
             commit_string: Some(commit_string_callback),
             forward_event: Some(forward_event_callback),
+            preedit_start: Some(preedit_start_callback),
+            preedit_draw: Some(preedit_draw_callback),
+            preedit_done: Some(preedit_done_callback),
             ..Default::default()
         };
         let data: *mut Self = res.as_mut().get_mut();
@@ -187,37 +274,11 @@ impl Ime {
         if self.ic.is_some() {
             return;
         }
-        let ic = self.ic.insert(Ic {
-            win,
-            ic: 0,
-        });
+        let ic = self.ic.insert(Ic { win, ic: 0 });
         let data: *mut Ic = ic;
         if !unsafe { xcb_xim_open(self.im, Some(open_callback), true, data as _) } {
             self.ic.take();
             return;
-        }
-    }
-
-    fn set_ic_window(&mut self, win: u32) {
-        if let Some(ic) = self.ic.as_mut() {
-            if ic.win == win || ic.ic == 0 {
-                return;
-            }
-            ic.win = win;
-            let w = &mut ic.win as *mut _;
-            unsafe {
-                xcb_xim_set_ic_values(
-                    self.im,
-                    ic.ic,
-                    None,
-                    std::ptr::null_mut::<c_void>(),
-                    XCB_XIM_XNClientWindow,
-                    w,
-                    XCB_XIM_XNFocusWindow,
-                    w,
-                    std::ptr::null_mut::<c_void>(),
-                );
-            }
         }
     }
 
@@ -230,7 +291,6 @@ impl Ime {
                 } else {
                     unsafe { &*(event.ptr as *const xcb::ffi::xcb_key_release_event_t) }.event
                 };
-                self.set_ic_window(win);
                 if let Some(ic) = self.ic.as_mut() {
                     if ic.ic == 0 {
                         return false;
@@ -248,28 +308,49 @@ impl Ime {
     }
 
     pub fn update_pos(&mut self, win: u32, x: i16, y: i16) -> bool {
-        self.set_ic_window(win);
-        match &self.ic {
+        match &mut self.ic {
             Some(ic) if ic.ic != 0 => {
                 let spot = xcb_point_t { x, y };
-                unsafe {
-                    let nested = xcb_xim_create_nested_list(
+                let nested = unsafe {
+                    xcb_xim_create_nested_list(
                         self.im,
                         XCB_XIM_XNSpotLocation,
                         &spot,
                         std::ptr::null_mut::<c_void>(),
-                    );
-                    xcb_xim_set_ic_values(
-                        self.im,
-                        ic.ic,
-                        None,
-                        std::ptr::null_mut::<c_void>(),
-                        XCB_XIM_XNPreeditAttributes,
-                        &nested,
-                        std::ptr::null_mut::<c_void>(),
-                    );
-                    free(nested.data as _);
+                    )
+                };
+                if win != ic.win {
+                    ic.win = win;
+                    let w = &mut ic.win as *mut _;
+                    unsafe {
+                        xcb_xim_set_ic_values(
+                            self.im,
+                            ic.ic,
+                            None,
+                            std::ptr::null_mut::<c_void>(),
+                            XCB_XIM_XNClientWindow,
+                            w,
+                            XCB_XIM_XNFocusWindow,
+                            w,
+                            XCB_XIM_XNPreeditAttributes,
+                            &nested,
+                            std::ptr::null_mut::<c_void>(),
+                        );
+                    }
+                } else {
+                    unsafe {
+                        xcb_xim_set_ic_values(
+                            self.im,
+                            ic.ic,
+                            None,
+                            std::ptr::null_mut::<c_void>(),
+                            XCB_XIM_XNPreeditAttributes,
+                            &nested,
+                            std::ptr::null_mut::<c_void>(),
+                        );
+                    }
                 }
+                unsafe { free(nested.data as _) };
                 true
             }
             _ => false,
@@ -278,7 +359,7 @@ impl Ime {
 
     pub fn set_commit_string_cb<F>(&mut self, f: F)
     where
-        F: for<'a> FnMut(u32, Cow<'a, str>) + 'static,
+        F: for<'a> FnMut(u32, &'a str) + 'static,
     {
         self.callbacks.commit_string = Some(Box::new(f));
     }
@@ -288,6 +369,27 @@ impl Ime {
         F: for<'a> FnMut(&'a xcb::KeyPressEvent) + 'static,
     {
         self.callbacks.forward_event = Some(Box::new(f));
+    }
+
+    pub fn set_preedit_start_cb<F>(&mut self, f: F)
+    where
+        F: FnMut(u32) + 'static,
+    {
+        self.callbacks.preedit_start = Some(Box::new(f));
+    }
+
+    pub fn set_preedit_draw_cb<F>(&mut self, f: F)
+    where
+        F: for<'a> FnMut(u32, PreeditInfo<'a>) + 'static,
+    {
+        self.callbacks.preedit_draw = Some(Box::new(f));
+    }
+
+    pub fn set_preedit_done_cb<F>(&mut self, f: F)
+    where
+        F: FnMut(u32) + 'static,
+    {
+        self.callbacks.preedit_done = Some(Box::new(f));
     }
 }
 

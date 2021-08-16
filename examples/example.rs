@@ -61,6 +61,9 @@ fn main() {
             e.same_screen(),
         );
     });
+    ime.set_preedit_draw_cb(|win, info| {
+        dbg!(win, info);
+    });
 
     let mut wins = vec![];
     for _ in 0..3 {
@@ -76,20 +79,21 @@ fn main() {
         }
         let event = event.unwrap();
         dbg!(event.response_type());
-        println!(">>>>{}>>>>", n);
-        ime.process_event(&event);
-        println!("<<<<{}<<<<", n);
-        n += 1;
 
         let event_type = event.response_type() & !0x80;
-
         if xcb::FOCUS_IN == event_type {
             let event: &xcb::FocusInEvent = unsafe { xcb::cast_event(&event) };
             focus_win = event.event();
+            ime.update_pos(focus_win, 0, 0);
         }
 
         if xcb::CONFIGURE_NOTIFY == event_type {
             ime.update_pos(focus_win, 0, 0);
         }
+
+        println!(">>>>{}>>>>", n);
+        ime.process_event(&event);
+        println!("<<<<{}<<<<", n);
+        n += 1;
     }
 }
