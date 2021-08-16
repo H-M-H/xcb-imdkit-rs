@@ -4,17 +4,33 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
-    println!("cargo:rustc-link-lib=dylib=xcb");
-    println!("cargo:rustc-link-lib=dylib=xcb-util");
-    println!("cargo:rustc-link-lib=dylib=xcb-imdkit");
+    println!("cargo:rustc-link-lib=xcb");
+    println!("cargo:rustc-link-lib=xcb-util");
+    println!("cargo:rustc-link-lib=xcb-imdkit");
     println!("cargo:rerun-if-changed=xcb-imdkit.h");
-    let xcb_imdkit = pkg_config::probe_library("xcb-imdkit")
-        .expect("Could not find xcb-imdkit using pkg_config, make sure it is properly installed.");
+    let xcb_imdkit = match pkg_config::Config::new()
+        .atleast_version("1.0.3")
+        .probe("xcb-imdkit")
+    {
+        Ok(l) => l,
+        Err(err) => {
+            println!(
+                "cargo:warning=Could find NO suitable version of xcb-imdkit: {}",
+                err
+            );
+            std::process::exit(1);
+        }
+    };
+
+    for path in xcb_imdkit.link_paths {
+        println!("cargo:rustc-link-search={}", path.to_string_lossy());
+    }
 
     println!("cargo:rerun-if-changed=logging.c");
     cc::Build::new().file("logging.c").compile("logging");
 
-    let white_list = "(xcb|XCB)_(xim|XIM|im|xic)_.*|xcb_compound_text.*|xcb_utf8_to_compound_text|free";
+    let white_list =
+        "(xcb|XCB)_(xim|XIM|im|xic)_.*|xcb_compound_text.*|xcb_utf8_to_compound_text|free";
 
     let bindings = bindgen::Builder::default()
         .clang_args(
