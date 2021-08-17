@@ -126,7 +126,8 @@ extern "C" fn forward_event_callback(
     let ptr = event as *const xcb::ffi::xcb_key_press_event_t;
     let event = xcb::KeyPressEvent { ptr: ptr as _ };
     let ime = unsafe { &mut *(user_data as *mut Ime) };
-    ime.callbacks.forward_event.as_mut().map(|f| f(&event));
+    let win = ime.ic.as_ref().unwrap().win;
+    ime.callbacks.forward_event.as_mut().map(|f| f(win, &event));
     std::mem::forget(event);
 }
 
@@ -159,7 +160,7 @@ extern "C" fn preedit_done_callback(_im: *mut xcb_xim_t, _ic: xcb_xic_t, user_da
 }
 
 type StringCB = dyn for<'a> FnMut(u32, &'a str);
-type KeyPressCB = dyn for<'a> FnMut(&'a xcb::KeyPressEvent);
+type KeyPressCB = dyn for<'a> FnMut(u32, &'a xcb::KeyPressEvent);
 type PreeditDrawCB = dyn for<'a> FnMut(u32, PreeditInfo<'a>);
 type NotifyCB = dyn FnMut(u32);
 
@@ -453,13 +454,16 @@ impl Ime {
 
     // Set callback for keypress/keyrelease events unhandled by the IME.
     //
+    // The first argument passed is the window (set by [`update_pos`]), the second the key event.
     /// Often those events include all keyrelease events as well as the events for `ESC`, `Enter`
     /// or key combinations such as `CTRL+C`. Please note that [`xcb::KeyPressEvent`] ==
     /// [`xcb::KeyReleaseEvent`] (see [`xcb::ffi::xcb_key_release_event_t`]) and keyrelease events
     /// are also supplied.
+    ///
+    /// [`update_pos`]: Ime::update_pos
     pub fn set_forward_event_cb<F>(&mut self, f: F)
     where
-        F: for<'a> FnMut(&'a xcb::KeyPressEvent) + 'static,
+        F: for<'a> FnMut(u32, &'a xcb::KeyPressEvent) + 'static,
     {
         self.callbacks.forward_event = Some(Box::new(f));
     }
