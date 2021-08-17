@@ -352,8 +352,8 @@ impl Ime {
     /// the callback set by [`set_forward_event_cb`]. Often those events include all
     /// keyrelease events as well as the events for `ESC`, `Enter` or key combinations such as
     /// `CTRL+C`.
-    /// To obtain the text currently typed into the IME and to obtain the final string consult
-    /// [`set_commit_string_cb`] and [`set_preedit_draw_cb`].
+    /// To obtain the text currently typed into the IME and the final string consult
+    /// [`set_preedit_draw_cb`] and [`set_commit_string_cb`].
     ///
     /// [`set_forward_event_cb`]: Ime::set_forward_event_cb
     /// [`set_commit_string_cb`]: Ime::set_commit_string_cb
