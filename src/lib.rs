@@ -39,8 +39,12 @@ fn rust_log(msg: *const c_char) {
     }
 }
 
+unsafe fn ic_from_user_data(user_data: *mut c_void) -> &'static mut Ic {
+    &mut *(user_data as *mut Ic)
+}
+
 extern "C" fn create_ic_callback(im: *mut xcb_xim_t, new_ic: xcb_xic_t, user_data: *mut c_void) {
-    let ic = unsafe { &mut *(user_data as *mut Ic) };
+    let ic = unsafe { ic_from_user_data(user_data) };
     ic.ic = new_ic;
     unsafe {
         xcb_xim_set_ic_focus(im, new_ic);
@@ -48,7 +52,7 @@ extern "C" fn create_ic_callback(im: *mut xcb_xim_t, new_ic: xcb_xic_t, user_dat
 }
 
 extern "C" fn open_callback(im: *mut xcb_xim_t, user_data: *mut c_void) {
-    let ic = unsafe { &mut *(user_data as *mut Ic) };
+    let ic = unsafe { ic_from_user_data(user_data) };
     let input_style = _xcb_im_style_t_XCB_IM_PreeditPosition
         | _xcb_im_style_t_XCB_IM_StatusArea
         | _xcb_im_style_t_XCB_IM_PreeditCallbacks;
@@ -98,7 +102,11 @@ unsafe fn xim_encoding_to_utf8(
             free(utf8 as _);
         }
     }
-    String::from_utf8_lossy(&buf).into()
+    String::from_utf8_unchecked(buf).into()
+}
+
+unsafe fn ime_from_user_data(user_data: *mut c_void) -> &'static mut Ime {
+    &mut *(user_data as *mut Ime)
 }
 
 extern "C" fn commit_string_callback(
@@ -112,7 +120,7 @@ extern "C" fn commit_string_callback(
     user_data: *mut c_void,
 ) {
     let input = unsafe { xim_encoding_to_utf8(im, input, length as usize) };
-    let ime = unsafe { &mut *(user_data as *mut Ime) };
+    let ime = unsafe { ime_from_user_data(user_data) };
     let win = ime.ic.as_ref().unwrap().win;
     ime.callbacks.commit_string.as_mut().map(|f| f(win, &input));
 }
@@ -125,14 +133,17 @@ extern "C" fn forward_event_callback(
 ) {
     let ptr = event as *const xcb::ffi::xcb_key_press_event_t;
     let event = xcb::KeyPressEvent { ptr: ptr as _ };
-    let ime = unsafe { &mut *(user_data as *mut Ime) };
+    let ime = unsafe { ime_from_user_data(user_data) };
     let win = ime.ic.as_ref().unwrap().win;
     ime.callbacks.forward_event.as_mut().map(|f| f(win, &event));
+
+    // xcb::KeyPressEvent has a Drop impl that will free `event`, but since we don't own it, we
+    // have to prevent that from happening
     std::mem::forget(event);
 }
 
 extern "C" fn preedit_start_callback(_im: *mut xcb_xim_t, _ic: xcb_xic_t, user_data: *mut c_void) {
-    let ime = unsafe { &mut *(user_data as *mut Ime) };
+    let ime = unsafe { ime_from_user_data(user_data) };
     let win = ime.ic.as_ref().unwrap().win;
     ime.callbacks.preedit_start.as_mut().map(|f| f(win));
 }
@@ -145,7 +156,7 @@ extern "C" fn preedit_draw_callback(
 ) {
     let frame = unsafe { &*frame };
     let preedit_info = PreeditInfo { inner: frame, im };
-    let ime = unsafe { &mut *(user_data as *mut Ime) };
+    let ime = unsafe { ime_from_user_data(user_data) };
     let win = ime.ic.as_ref().unwrap().win;
     ime.callbacks
         .preedit_draw
@@ -154,7 +165,7 @@ extern "C" fn preedit_draw_callback(
 }
 
 extern "C" fn preedit_done_callback(_im: *mut xcb_xim_t, _ic: xcb_xic_t, user_data: *mut c_void) {
-    let ime = unsafe { &mut *(user_data as *mut Ime) };
+    let ime = unsafe { ime_from_user_data(user_data) };
     let win = ime.ic.as_ref().unwrap().win;
     ime.callbacks.preedit_done.as_mut().map(|f| f(win));
 }
@@ -188,7 +199,6 @@ pub struct PreeditInfo<'a> {
 }
 
 impl<'a> PreeditInfo<'a> {
-
     /// Status bitmask.
     ///
     /// 0x01: no string
@@ -253,7 +263,6 @@ pub struct Ime {
 }
 
 impl Ime {
-
     /// Set the global logger for xcb-imdkit.
     ///
     /// The callback will receive debug messages from the [C
@@ -277,7 +286,7 @@ impl Ime {
     pub fn new(
         conn: Arc<xcb::Connection>,
         screen_id: i32,
-        im_name: Option<String>,
+        im_name: Option<&str>,
     ) -> Pin<Box<Self>> {
         let mut res = unsafe { Self::unsafe_new(&conn, screen_id, im_name) };
         res.conn = Some(conn);
@@ -298,7 +307,7 @@ impl Ime {
     pub unsafe fn unsafe_new(
         conn: &xcb::Connection,
         screen_id: i32,
-        im_name: Option<String>,
+        im_name: Option<&str>,
     ) -> Pin<Box<Self>> {
         xcb_compound_text_init();
         let im = xcb_xim_create(
