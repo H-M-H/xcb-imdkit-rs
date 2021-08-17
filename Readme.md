@@ -12,10 +12,11 @@ To get started quickly, consult the examples folder.
 
 ## Dependencies
 
-This crate depends on `xcb` and `xcb-util`. `xcb-imdkit` is built from source, which requires git,
-cmake and a C compiler, and statically linked by default. If you prefer to use the system version of
-`xcb-imdkit` (make sure you have at least version 1.0.3 installed), you can specify `use-system-lib`
-as feature flag.
+This crate depends on `xcb` and `xcb-util`. `xcb-imdkit` is built from source, which requires a C
+compiler and git if the xcb-imdkit submodule has not been initialized, and statically linked by
+default. If you prefer to use the system version of `xcb-imdkit` (make sure you have at least
+version 1.0.3 installed), you can specify `use-system-lib` as feature flag, `pkg-config` is required
+to let Rust know where to find the libraries to link to in this case.
 
 ## Using xcb-imdkit-rs
 
