@@ -1,0 +1,19 @@
+name: Build
+
+on:
+  push:
+    branches: [ '*' ]
+    tags:
+      - v*
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download deps
+      run: sudo apt-get update && sudo apt-get install libxcb-util-dev
+    - uses: actions/checkout@v2
+    - name: Build
+      run: cargo build --examples
