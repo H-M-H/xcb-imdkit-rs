@@ -1,2 +1,4 @@
 /target
-Cargo.lock
+/Cargo.lock
+/deps/dist
+/deps/xcb-imdkit
