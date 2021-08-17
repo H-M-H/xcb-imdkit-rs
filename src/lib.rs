@@ -102,7 +102,7 @@ unsafe fn xim_encoding_to_utf8(
             free(utf8 as _);
         }
     }
-    String::from_utf8_unchecked(buf).into()
+    String::from_utf8_unchecked(buf)
 }
 
 unsafe fn ime_from_user_data(user_data: *mut c_void) -> &'static mut Ime {
