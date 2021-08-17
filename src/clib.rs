@@ -4,7 +4,7 @@
 #![allow(unused)]
 #![allow(improper_ctypes)]
 
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+include!("bindings.rs");
 
 impl Default for xcb_xim_im_callback {
     fn default() -> Self {

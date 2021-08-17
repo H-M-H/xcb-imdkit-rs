@@ -1,0 +1,3 @@
+[submodule "deps/xcb-imdkit"]
+	path = deps/xcb-imdkit
+	url = https://github.com/fcitx/xcb-imdkit

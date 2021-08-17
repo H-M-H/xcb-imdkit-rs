@@ -1,12 +1,22 @@
-extern crate bindgen;
-
 use std::env;
-use std::path::PathBuf;
+
+const XCB_IMDKIT_SRC: &[&str] = &[
+    "parser.c",
+    "ximproto.c",
+    // "imdkit.c", // currently unused as this crate only implements the client
+    "protocolhandler.c",
+    "message.c",
+    "common.c",
+    "imclient.c",
+    "clientprotocolhandler.c",
+    "encoding.c",
+    "xlibi18n/lcCT.c",
+    "xlibi18n/lcUTF8.c",
+    "xlibi18n/lcCharSet.c",
+];
 
 fn main() {
     let use_system_lib = env::var("CARGO_FEATURE_USE_SYSTEM_LIB").is_ok();
-    let mut include_paths: Vec<String> = vec![];
-    let mut link_paths: Vec<String> = vec![];
 
     println!("cargo:rerun-if-changed=deps/build.sh");
     println!("cargo:rerun-if-changed=xcb-imdkit.h");
@@ -29,53 +39,23 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        include_paths = xcb_imdkit
-            .include_paths
-            .iter()
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect();
-        link_paths = xcb_imdkit
-            .link_paths
-            .iter()
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect();
-    } else {
-        println!("cargo:rustc-link-lib=static=xcb-imdkit");
-        if !std::process::Command::new("sh")
-            .arg("build.sh")
-            .current_dir("deps")
-            .status()
-            .expect("Failed to execut deps/build.sh")
-            .success()
-        {
-            panic!("Failed to build xcb-imdkit C library.");
+        for path in xcb_imdkit.link_paths {
+            println!("cargo:rustc-link-search={}", path.to_string_lossy());
         }
-        include_paths.push("deps/dist/include".into());
-        link_paths.push("deps/dist/lib".into())
-    }
-
-    for path in link_paths {
-        println!("cargo:rustc-link-search={}", path);
+    } else {
+        let mut xcb_imdkit_build = cc::Build::new();
+        xcb_imdkit_build.warnings(false);
+        xcb_imdkit_build.includes(&[
+            "deps/xcb-imdkit/uthash",
+            "deps/xcb-imdkit/src",
+            "deps/xcb-imdkit-generated-headers",
+        ]);
+        for p in XCB_IMDKIT_SRC {
+            xcb_imdkit_build.file(format!("deps/xcb-imdkit/src/{}", p));
+        }
+        xcb_imdkit_build.compile("xcb-imdkit");
     }
 
     println!("cargo:rerun-if-changed=logging.c");
     cc::Build::new().file("logging.c").compile("logging");
-
-    let white_list =
-        "(xcb|XCB)_(xim|XIM|im|xic)_.*|xcb_compound_text.*|xcb_utf8_to_compound_text|free";
-
-    let bindings = bindgen::Builder::default()
-        .clang_args(include_paths.iter().map(|p| format!("-I{}", p)))
-        .allowlist_function(white_list)
-        .allowlist_var(white_list)
-        .allowlist_type("_xcb_im_style_t")
-        .size_t_is_usize(true)
-        .impl_debug(true)
-        .header("xcb-imdkit.h")
-        .generate()
-        .expect("Failed to generate bindings.");
-    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
-    bindings
-        .write_to_file(out_path.join("bindings.rs"))
-        .expect("Couldn't write bindings!");
 }
