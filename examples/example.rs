@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use xcb_imdkit::Ime;
+use xcb_imdkit::ImeClient;
 
 fn create_window(connection: Arc<xcb::Connection>, screen: &xcb::Screen) -> u32 {
     let w = connection.generate_id();
@@ -42,8 +42,8 @@ fn main() {
         .nth(screen_default_nbr as usize)
         .unwrap();
 
-    Ime::set_logger(|msg| print!("Log: {}", msg));
-    let mut ime = Ime::new(connection.clone(), screen_default_nbr, None);
+    ImeClient::set_logger(|msg| print!("Log: {}", msg));
+    let mut ime = ImeClient::new(connection.clone(), screen_default_nbr, None);
     ime.set_commit_string_cb(|win, input| println!("Win {}, got: {}", win, input));
     ime.set_forward_event_cb(|win, e| {
         dbg!(

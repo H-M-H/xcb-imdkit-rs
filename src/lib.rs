@@ -105,8 +105,8 @@ unsafe fn xim_encoding_to_utf8(
     String::from_utf8_unchecked(buf)
 }
 
-unsafe fn ime_from_user_data(user_data: *mut c_void) -> &'static mut Ime {
-    &mut *(user_data as *mut Ime)
+unsafe fn ime_from_user_data(user_data: *mut c_void) -> &'static mut ImeClient {
+    &mut *(user_data as *mut ImeClient)
 }
 
 extern "C" fn commit_string_callback(
@@ -190,7 +190,7 @@ struct Ic {
     ic: xcb_xic_t,
 }
 
-/// `PreeditInfo` provides information about the text that is currently being edited by the IME.
+/// [`PreeditInfo`] provides information about the text that is currently being edited by the IME.
 ///
 /// Additionally it provides information about how the text has been changed.
 pub struct PreeditInfo<'a> {
@@ -201,8 +201,8 @@ pub struct PreeditInfo<'a> {
 impl<'a> PreeditInfo<'a> {
     /// Status bitmask.
     ///
-    /// 0x01: no string
-    /// 0x02: no feedback
+    /// - `0x01`: no string
+    /// - `0x02`: no feedback
     ///
     /// If no bits are set, [`text`] contains the current text of the IME.
     ///
@@ -250,19 +250,19 @@ impl<'a> std::fmt::Debug for PreeditInfo<'a> {
     }
 }
 
-/// `Ime` the Input Method Editor (IME).
+/// Input Method Editor (IME) client.
 ///
-/// `Ime` represents one instance of an Input Method Editor. It provides callbacks for event
-/// handling as well as control over the position of the IME. There should be only one IME per
-/// application and it is advised to create at most one instance.
-pub struct Ime {
+/// [`ImeClient`] represents one instance of an Input Method Editor client. It provides callbacks for
+/// event handling as well as control over the position of the IME window. There should be only one
+/// IME client per application and it is advised to create at most one instance.
+pub struct ImeClient {
     conn: Option<Arc<xcb::Connection>>,
     im: *mut xcb_xim_t,
     ic: Option<Ic>,
     callbacks: Callbacks,
 }
 
-impl Ime {
+impl ImeClient {
     /// Set the global logger for xcb-imdkit.
     ///
     /// The callback will receive debug messages from the [C
@@ -274,7 +274,7 @@ impl Ime {
         LOGGER.lock().unwrap().replace(Box::new(f));
     }
 
-    /// Create a new [`Ime`].
+    /// Create a new [`ImeClient`].
     ///
     /// The first two arguments correspond to the result of [`xcb::Connection::connect`] with the
     /// connection wrapped into an [`Arc`] to ensure that the `Ime` does not outlive its
@@ -293,17 +293,17 @@ impl Ime {
         res
     }
 
-    /// Create a new [`Ime`].
+    /// Create a new [`ImeClient`].
     ///
     /// This is the same as [`new`], except that the [`xcb::Connection`] is not wrapped
     /// into an [`Arc`].
     ///
     /// # Safety
     ///
-    /// The caller is responsible to ensure that the `Ime` does not outlive the connection.
+    /// The caller is responsible to ensure that the [`ImeClient`] does not outlive the connection.
     ///
     /// [`Arc`]: std::sync::Arc
-    /// [`new`]: Ime::new
+    /// [`new`]: ImeClient::new
     pub unsafe fn unsafe_new(
         conn: &xcb::Connection,
         screen_id: i32,
@@ -348,25 +348,25 @@ impl Ime {
         }
     }
 
-    /// Let the IME process XCB's events.
+    /// Let the IME client process XCB's events.
     ///
-    /// Return `true` if the IME is handling the event and `false` if the event is ignored by the
-    /// IME and has to be handled separately.
+    /// Return `true` if the IME client is handling the event and `false` if the event is ignored
+    /// by the IME client and has to be handled separately.
     ///
     /// This method should be called on **any** event from the event queue and not just
     /// keypress/keyrelease events as it handles other events as well.
     ///
-    /// Typically you will want to let the IME handle all keypress/keyrelease events in your main
-    /// loop. The IME will then forward all key events that were not used for input composition to
-    /// the callback set by [`set_forward_event_cb`]. Often those events include all
+    /// Typically you will want to let the IME client handle all keypress/keyrelease events in your
+    /// main loop. The IME client will then forward all key events that were not used for input
+    /// composition to the callback set by [`set_forward_event_cb`]. Often those events include all
     /// keyrelease events as well as the events for `ESC`, `Enter` or key combinations such as
     /// `CTRL+C`.
     /// To obtain the text currently typed into the IME and the final string consult
     /// [`set_preedit_draw_cb`] and [`set_commit_string_cb`].
     ///
-    /// [`set_forward_event_cb`]: Ime::set_forward_event_cb
-    /// [`set_commit_string_cb`]: Ime::set_commit_string_cb
-    /// [`set_preedit_draw_cb`]: Ime::set_preedit_draw_cb
+    /// [`set_forward_event_cb`]: ImeClient::set_forward_event_cb
+    /// [`set_commit_string_cb`]: ImeClient::set_commit_string_cb
+    /// [`set_preedit_draw_cb`]: ImeClient::set_preedit_draw_cb
     pub fn process_event(&mut self, event: &xcb::GenericEvent) -> bool {
         if !unsafe { xcb_xim_filter_event(self.im, event.ptr as _) } {
             let mask = event.response_type() & !0x80;
@@ -392,13 +392,13 @@ impl Ime {
         false
     }
 
-    /// Set the position at which to place the IME.
+    /// Set the position at which to place the IME window.
     ///
-    /// Set the position of the IME popup relative to the window specified by `win`. Coordinates
+    /// Set the position of the IME window relative to the window specified by `win`. Coordinates
     /// increase from the top left corner of the window.
     ///
-    /// Return `true` if an update for the IME position has been queued and `false` if no update
-    /// could be queued.
+    /// Return `true` if an update for the IME window position has been queued and `false` if no
+    /// update could be queued.
     pub fn update_pos(&mut self, win: u32, x: i16, y: i16) -> bool {
         match &mut self.ic {
             Some(ic) if ic.ic != 0 => {
@@ -453,7 +453,7 @@ impl Ime {
     ///
     /// The window (set by [`update_pos`]) as well as the completed input are passed as arguments.
     ///
-    /// [`update_pos`]: Ime::update_pos
+    /// [`update_pos`]: ImeClient::update_pos
     pub fn set_commit_string_cb<F>(&mut self, f: F)
     where
         F: for<'a> FnMut(u32, &'a str) + 'static,
@@ -469,7 +469,7 @@ impl Ime {
     /// [`xcb::KeyReleaseEvent`] (see [`xcb::ffi::xcb_key_release_event_t`]) and keyrelease events
     /// are also supplied.
     ///
-    /// [`update_pos`]: Ime::update_pos
+    /// [`update_pos`]: ImeClient::update_pos
     pub fn set_forward_event_cb<F>(&mut self, f: F)
     where
         F: for<'a> FnMut(u32, &'a xcb::KeyPressEvent) + 'static,
@@ -481,7 +481,7 @@ impl Ime {
     ///
     /// The current window (set by [`update_pos`]) is supplied as argument.
     ///
-    /// [`update_pos`]: Ime::update_pos
+    /// [`update_pos`]: ImeClient::update_pos
     pub fn set_preedit_start_cb<F>(&mut self, f: F)
     where
         F: FnMut(u32) + 'static,
@@ -489,12 +489,12 @@ impl Ime {
         self.callbacks.preedit_start = Some(Box::new(f));
     }
 
-    /// Callback called whenever the text whitin the IME changes.
+    /// Callback called whenever the text whitin the IME has changed.
     ///
     /// The current window (set by [`update_pos`]) is supplied as argument as well as
     /// [`PreeditInfo`], which contains, among other things, the current text of the IME.
     ///
-    /// [`update_pos`]: Ime::update_pos
+    /// [`update_pos`]: ImeClient::update_pos
     pub fn set_preedit_draw_cb<F>(&mut self, f: F)
     where
         F: for<'a> FnMut(u32, PreeditInfo<'a>) + 'static,
@@ -506,7 +506,7 @@ impl Ime {
     ///
     /// The current window (set by [`update_pos`]) is supplied as argument.
     ///
-    /// [`update_pos`]: Ime::update_pos
+    /// [`update_pos`]: ImeClient::update_pos
     pub fn set_preedit_done_cb<F>(&mut self, f: F)
     where
         F: FnMut(u32) + 'static,
@@ -515,7 +515,7 @@ impl Ime {
     }
 }
 
-impl Drop for Ime {
+impl Drop for ImeClient {
     fn drop(&mut self) {
         unsafe {
             xcb_xim_close(self.im);
