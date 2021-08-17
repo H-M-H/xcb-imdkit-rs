@@ -43,6 +43,17 @@ fn main() {
             println!("cargo:rustc-link-search={}", path.to_string_lossy());
         }
     } else {
+        if !std::path::Path::new("deps/xcb-imdkit/.git").exists() {
+            if !std::process::Command::new("git")
+                .args(&["submodule", "update", "--init"])
+                .status()
+                .expect("Failed to invoke git to init submodule.")
+                .success()
+            {
+                panic!("Initializing xcb-imdkit submodule failed!");
+            }
+        }
+
         let mut xcb_imdkit_build = cc::Build::new();
         xcb_imdkit_build.warnings(false);
         xcb_imdkit_build.includes(&[
