@@ -42,7 +42,7 @@ fn main() {
         .nth(screen_default_nbr as usize)
         .unwrap();
 
-    ImeClient::set_logger(|msg| print!("Log: {}", msg));
+    ImeClient::set_logger(|msg| println!("Log: {}", msg));
     let mut ime = ImeClient::new(
         connection.clone(),
         screen_default_nbr,

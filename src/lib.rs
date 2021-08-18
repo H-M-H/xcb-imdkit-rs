@@ -12,7 +12,6 @@ To get started quickly, consult the examples folder.
 #[macro_use]
 extern crate lazy_static;
 
-use std::borrow::Cow;
 use std::os::raw::{c_char, c_void};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -23,7 +22,7 @@ use clib::*;
 
 mod clib;
 
-type LogFn = dyn for<'a> FnMut(Cow<'a, str>) + Send;
+type LogFn = dyn for<'a> FnMut(&'a str) + Send;
 
 lazy_static! {
     static ref LOGGER: Mutex<Option<Box<LogFn>>> = Mutex::default();
@@ -36,6 +35,7 @@ extern "C" {
 #[no_mangle]
 fn rust_log(msg: *const c_char) {
     let msg = unsafe { std::ffi::CStr::from_ptr(msg) }.to_string_lossy();
+    let msg = msg.trim();
     if let Some(logger) = LOGGER.lock().unwrap().as_mut() {
         logger(msg);
     }
@@ -288,7 +288,7 @@ impl ImeClient {
     /// library](https://github.com/fcitx/xcb-imdkit) this crate is wrapping.
     pub fn set_logger<F>(f: F)
     where
-        F: for<'a> FnMut(Cow<'a, str>) + Send + 'static,
+        F: for<'a> FnMut(&'a str) + Send + 'static,
     {
         LOGGER.lock().unwrap().replace(Box::new(f));
     }
