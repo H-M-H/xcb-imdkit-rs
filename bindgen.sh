@@ -10,4 +10,10 @@ bindgen \
 	--no-layout-tests \
 	"xcb-imdkit.h" \
 	-o src/bindings.rs \
-	-- -Ideps/xcb-imdkit/src -Ideps/xcb-imdkit/uthash -Ideps/xcb-imdkit-generated-headers
+	-- \
+	-Ideps/xcb-imdkit/src \
+	-Ideps/xcb-imdkit/uthash \
+	-Ideps/xcb-imdkit-generated-headers \
+	-std=c99 \
+	-D_GNU_SOURCE \
+	-Dxcb_imdkit_EXPORTS

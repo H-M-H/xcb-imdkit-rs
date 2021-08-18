@@ -55,7 +55,10 @@ fn main() {
         }
 
         let mut xcb_imdkit_build = cc::Build::new();
-        xcb_imdkit_build.warnings(false);
+        xcb_imdkit_build.flag_if_supported("-std=c99");
+        xcb_imdkit_build.flag_if_supported("-Wno-unused-parameter");
+        xcb_imdkit_build.define("_GNU_SOURCE", None);
+        xcb_imdkit_build.define("xcb_imdkit_EXPORTS", None);
         xcb_imdkit_build.includes(&[
             "deps/xcb-imdkit/uthash",
             "deps/xcb-imdkit/src",
