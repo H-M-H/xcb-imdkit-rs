@@ -550,6 +550,12 @@ impl ImeClient {
 impl Drop for ImeClient {
     fn drop(&mut self) {
         unsafe {
+            match &mut self.ic {
+                Some(ic) if ic.ic != 0 => {
+                    xcb_xim_destroy_ic(self.im, ic.ic, None, std::ptr::null_mut());
+                }
+                _ => (),
+            }
             xcb_xim_close(self.im);
             xcb_xim_destroy(self.im);
         }
