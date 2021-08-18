@@ -17,6 +17,8 @@ use std::os::raw::{c_char, c_void};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use bitflags::bitflags;
+
 use clib::*;
 
 mod clib;
@@ -52,12 +54,11 @@ extern "C" fn create_ic_callback(im: *mut xcb_xim_t, new_ic: xcb_xic_t, user_dat
 }
 
 extern "C" fn open_callback(im: *mut xcb_xim_t, user_data: *mut c_void) {
-    let ic = unsafe { ic_from_user_data(user_data) };
-    let input_style = _xcb_im_style_t_XCB_IM_PreeditPosition
-        | _xcb_im_style_t_XCB_IM_StatusArea
-        | _xcb_im_style_t_XCB_IM_PreeditCallbacks;
+    let ime = unsafe { ime_from_user_data(user_data) };
+    let input_style = ime.input_style.bits();
     let spot = xcb_point_t { x: 0, y: 0 };
-    let w = &mut ic.win as *mut _;
+    let ic = ime.ic.as_mut().unwrap();
+    let w = &mut ic.win as *mut u32;
     unsafe {
         let nested = xcb_xim_create_nested_list(
             im,
@@ -68,7 +69,7 @@ extern "C" fn open_callback(im: *mut xcb_xim_t, user_data: *mut c_void) {
         xcb_xim_create_ic(
             im,
             Some(create_ic_callback),
-            user_data,
+            ic as *mut Ic as _,
             XCB_XIM_XNInputStyle,
             &input_style,
             XCB_XIM_XNClientWindow,
@@ -170,6 +171,21 @@ extern "C" fn preedit_done_callback(_im: *mut xcb_xim_t, _ic: xcb_xic_t, user_da
     ime.callbacks.preedit_done.as_mut().map(|f| f(win));
 }
 
+bitflags! {
+    /// [`InputStyle`] determines how the IME should integrate into the application.
+    pub struct InputStyle: u32 {
+        /// By default let the IME handle all input composition internally and only process the
+        /// final string after composition is finished using [`ImeClient::set_commit_string_cb`].
+        const DEFAULT = 0;
+
+        /// Enable calling of the preedit callbacks like the one set with
+        /// [`ImeClient::set_preedit_draw_cb`]. This enables displaying the currently edited text
+        /// inside the application and not only within the IME. The IME may stop displaying its
+        /// cursor if this flag is set.
+        const PREEDIT_CALLBACKS = _xcb_im_style_t_XCB_IM_PreeditCallbacks;
+    }
+}
+
 type StringCB = dyn for<'a> FnMut(u32, &'a str);
 type KeyPressCB = dyn for<'a> FnMut(u32, &'a xcb::KeyPressEvent);
 type PreeditDrawCB = dyn for<'a> FnMut(u32, PreeditInfo<'a>);
@@ -260,6 +276,7 @@ pub struct ImeClient {
     im: *mut xcb_xim_t,
     ic: Option<Ic>,
     callbacks: Callbacks,
+    input_style: InputStyle,
 }
 
 impl ImeClient {
@@ -279,6 +296,7 @@ impl ImeClient {
     /// The first two arguments correspond to the result of [`xcb::Connection::connect`] with the
     /// connection wrapped into an [`Arc`] to ensure that the `Ime` does not outlive its
     /// connection.
+    /// For documentation on `input_style` refer to [`InputStyle`].
     /// `im_name` can be used to specify a custom IME server to connect to using the syntax
     /// `@im=custom_server`.
     ///
@@ -286,9 +304,10 @@ impl ImeClient {
     pub fn new(
         conn: Arc<xcb::Connection>,
         screen_id: i32,
+        input_style: InputStyle,
         im_name: Option<&str>,
     ) -> Pin<Box<Self>> {
-        let mut res = unsafe { Self::unsafe_new(&conn, screen_id, im_name) };
+        let mut res = unsafe { Self::unsafe_new(&conn, screen_id, input_style, im_name) };
         res.conn = Some(conn);
         res
     }
@@ -307,6 +326,7 @@ impl ImeClient {
     pub unsafe fn unsafe_new(
         conn: &xcb::Connection,
         screen_id: i32,
+        input_style: InputStyle,
         im_name: Option<&str>,
     ) -> Pin<Box<Self>> {
         xcb_compound_text_init();
@@ -320,6 +340,7 @@ impl ImeClient {
             im,
             ic: None,
             callbacks: Callbacks::default(),
+            input_style,
         });
         let callbacks = xcb_xim_im_callback {
             commit_string: Some(commit_string_callback),
@@ -341,8 +362,8 @@ impl ImeClient {
         if self.ic.is_some() {
             return;
         }
-        let ic = self.ic.insert(Ic { win, ic: 0 });
-        let data: *mut Ic = ic;
+        self.ic.insert(Ic { win, ic: 0 });
+        let data: *mut ImeClient = self as _;
         if !unsafe { xcb_xim_open(self.im, Some(open_callback), true, data as _) } {
             self.ic.take();
         }
@@ -480,6 +501,7 @@ impl ImeClient {
     /// Callback called once the IME has been opened.
     ///
     /// The current window (set by [`update_pos`]) is supplied as argument.
+    /// Calls callback only if [`InputStyle::PREEDIT_CALLBACKS`] is set.
     ///
     /// [`update_pos`]: ImeClient::update_pos
     pub fn set_preedit_start_cb<F>(&mut self, f: F)
@@ -493,6 +515,7 @@ impl ImeClient {
     ///
     /// The current window (set by [`update_pos`]) is supplied as argument as well as
     /// [`PreeditInfo`], which contains, among other things, the current text of the IME.
+    /// Calls callback only if [`InputStyle::PREEDIT_CALLBACKS`] is set.
     ///
     /// [`update_pos`]: ImeClient::update_pos
     pub fn set_preedit_draw_cb<F>(&mut self, f: F)
@@ -505,6 +528,7 @@ impl ImeClient {
     /// Callback called once the IME has been closed.
     ///
     /// The current window (set by [`update_pos`]) is supplied as argument.
+    /// Calls callback only if [`InputStyle::PREEDIT_CALLBACKS`] is set.
     ///
     /// [`update_pos`]: ImeClient::update_pos
     pub fn set_preedit_done_cb<F>(&mut self, f: F)
