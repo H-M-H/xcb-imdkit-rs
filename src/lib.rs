@@ -56,8 +56,8 @@ extern "C" fn create_ic_callback(im: *mut xcb_xim_t, new_ic: xcb_xic_t, user_dat
 extern "C" fn open_callback(im: *mut xcb_xim_t, user_data: *mut c_void) {
     let ime = unsafe { ime_from_user_data(user_data) };
     let input_style = ime.input_style.bits();
-    let spot = xcb_point_t { x: 0, y: 0 };
     let ic = ime.ic.as_mut().unwrap();
+    let spot = xcb_point_t { x: ic.x, y: ic.y };
     let w = &mut ic.win as *mut u32;
     unsafe {
         let nested = xcb_xim_create_nested_list(
@@ -200,9 +200,11 @@ struct Callbacks {
     preedit_done: Option<Box<NotifyCB>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct Ic {
     win: u32,
+    x: i16,
+    y: i16,
     ic: xcb_xic_t,
 }
 
@@ -358,11 +360,11 @@ impl ImeClient {
         res
     }
 
-    fn try_open_ic(&mut self, win: u32) {
+    fn try_open_ic(&mut self, win: u32, x: i16, y: i16) {
         if self.ic.is_some() {
             return;
         }
-        self.ic.insert(Ic { win, ic: 0 });
+        self.ic.insert(Ic { win, x, y, ic: 0 });
         let data: *mut ImeClient = self as _;
         if !unsafe { xcb_xim_open(self.im, Some(open_callback), true, data as _) } {
             self.ic.take();
@@ -397,16 +399,19 @@ impl ImeClient {
                 } else {
                     unsafe { &*(event.ptr as *const xcb::ffi::xcb_key_release_event_t) }.event
                 };
-                if let Some(ic) = self.ic.as_mut() {
-                    if ic.ic == 0 {
-                        return false;
+                match self.ic {
+                    Some(ic) if ic.ic != 0 => {
+                        unsafe {
+                            xcb_xim_forward_event(self.im, ic.ic, event.ptr as _);
+                        }
+                        return true;
                     }
-                    unsafe {
-                        xcb_xim_forward_event(self.im, ic.ic, event.ptr as _);
+                    Some(ic) => {
+                        self.try_open_ic(ic.win, ic.x, ic.y);
                     }
-                    return true;
-                } else {
-                    self.try_open_ic(win);
+                    None => {
+                        self.try_open_ic(win, 0, 0);
+                    }
                 }
             }
         }
@@ -466,7 +471,10 @@ impl ImeClient {
                 unsafe { free(nested.data as _) };
                 true
             }
-            _ => false,
+            _ => {
+                self.try_open_ic(win, x, y);
+                false
+            }
         }
     }
 
