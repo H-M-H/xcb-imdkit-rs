@@ -54,6 +54,18 @@ fn main() {
             }
         }
 
+        let xcb = pkg_config::Config::new()
+            .probe("xcb")
+            .expect("Could not find xcb!");
+        let xcb_util = pkg_config::Config::new()
+            .probe("xcb-util")
+            .expect("Could not find xcb-util!");
+
+
+        for path in xcb.link_paths.iter().chain(xcb_util.link_paths.iter()) {
+            println!("cargo:rustc-link-search={}", path.to_string_lossy());
+        }
+
         let mut xcb_imdkit_build = cc::Build::new();
         xcb_imdkit_build.flag_if_supported("-std=c99");
         xcb_imdkit_build.flag_if_supported("-Wno-unused-parameter");
@@ -64,6 +76,8 @@ fn main() {
             "deps/xcb-imdkit/src",
             "deps/xcb-imdkit-generated-headers",
         ]);
+        xcb_imdkit_build.includes(xcb.include_paths);
+        xcb_imdkit_build.includes(xcb_util.include_paths);
         for p in XCB_IMDKIT_SRC {
             xcb_imdkit_build.file(format!("deps/xcb-imdkit/src/{}", p));
         }
