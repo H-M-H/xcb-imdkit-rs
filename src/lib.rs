@@ -41,13 +41,9 @@ fn rust_log(msg: *const c_char) {
     }
 }
 
-unsafe fn ic_from_user_data(user_data: *mut c_void) -> &'static mut Ic {
-    &mut *(user_data as *mut Ic)
-}
-
 extern "C" fn create_ic_callback(im: *mut xcb_xim_t, new_ic: xcb_xic_t, user_data: *mut c_void) {
-    let ic = unsafe { ic_from_user_data(user_data) };
-    ic.ic = new_ic;
+    let ime = unsafe { ime_from_user_data(user_data) };
+    ime.ic = Some(new_ic);
     unsafe {
         xcb_xim_set_ic_focus(im, new_ic);
     }
@@ -56,9 +52,11 @@ extern "C" fn create_ic_callback(im: *mut xcb_xim_t, new_ic: xcb_xic_t, user_dat
 extern "C" fn open_callback(im: *mut xcb_xim_t, user_data: *mut c_void) {
     let ime = unsafe { ime_from_user_data(user_data) };
     let input_style = ime.input_style.bits();
-    let ic = ime.ic.as_mut().unwrap();
-    let spot = xcb_point_t { x: ic.x, y: ic.y };
-    let w = &mut ic.win as *mut u32;
+    let spot = xcb_point_t {
+        x: ime.pos_req.x,
+        y: ime.pos_req.y,
+    };
+    let w = &mut ime.pos_req.win as *mut u32;
     unsafe {
         let nested = xcb_xim_create_nested_list(
             im,
@@ -69,7 +67,7 @@ extern "C" fn open_callback(im: *mut xcb_xim_t, user_data: *mut c_void) {
         xcb_xim_create_ic(
             im,
             Some(create_ic_callback),
-            ic as *mut Ic as _,
+            user_data,
             XCB_XIM_XNInputStyle,
             &input_style,
             XCB_XIM_XNClientWindow,
@@ -82,6 +80,7 @@ extern "C" fn open_callback(im: *mut xcb_xim_t, user_data: *mut c_void) {
         );
         free(nested.data as _);
     }
+    ime.pos_cur = ime.pos_req;
 }
 
 unsafe fn xim_encoding_to_utf8(
@@ -122,8 +121,18 @@ extern "C" fn commit_string_callback(
 ) {
     let input = unsafe { xim_encoding_to_utf8(im, input, length as usize) };
     let ime = unsafe { ime_from_user_data(user_data) };
-    let win = ime.ic.as_ref().unwrap().win;
+    let win = ime.pos_req.win;
     ime.callbacks.commit_string.as_mut().map(|f| f(win, &input));
+}
+
+extern "C" fn update_pos_callback(_im: *mut xcb_xim_t, ic: xcb_xic_t, user_data: *mut c_void) {
+    let ime = unsafe { ime_from_user_data(user_data) };
+    if ime.pos_update_queued {
+        ime.pos_update_queued = false;
+        ime.send_pos_update(ic);
+    } else {
+        ime.is_processing_pos_update = false;
+    }
 }
 
 extern "C" fn forward_event_callback(
@@ -135,7 +144,7 @@ extern "C" fn forward_event_callback(
     let ptr = event as *const xcb::ffi::xcb_key_press_event_t;
     let event = xcb::KeyPressEvent { ptr: ptr as _ };
     let ime = unsafe { ime_from_user_data(user_data) };
-    let win = ime.ic.as_ref().unwrap().win;
+    let win = ime.pos_req.win;
     ime.callbacks.forward_event.as_mut().map(|f| f(win, &event));
 
     // xcb::KeyPressEvent has a Drop impl that will free `event`, but since we don't own it, we
@@ -145,7 +154,7 @@ extern "C" fn forward_event_callback(
 
 extern "C" fn preedit_start_callback(_im: *mut xcb_xim_t, _ic: xcb_xic_t, user_data: *mut c_void) {
     let ime = unsafe { ime_from_user_data(user_data) };
-    let win = ime.ic.as_ref().unwrap().win;
+    let win = ime.pos_req.win;
     ime.callbacks.preedit_start.as_mut().map(|f| f(win));
 }
 
@@ -158,7 +167,7 @@ extern "C" fn preedit_draw_callback(
     let frame = unsafe { &*frame };
     let preedit_info = PreeditInfo { inner: frame, im };
     let ime = unsafe { ime_from_user_data(user_data) };
-    let win = ime.ic.as_ref().unwrap().win;
+    let win = ime.pos_req.win;
     ime.callbacks
         .preedit_draw
         .as_mut()
@@ -167,7 +176,7 @@ extern "C" fn preedit_draw_callback(
 
 extern "C" fn preedit_done_callback(_im: *mut xcb_xim_t, _ic: xcb_xic_t, user_data: *mut c_void) {
     let ime = unsafe { ime_from_user_data(user_data) };
-    let win = ime.ic.as_ref().unwrap().win;
+    let win = ime.pos_req.win;
     ime.callbacks.preedit_done.as_mut().map(|f| f(win));
 }
 
@@ -201,11 +210,10 @@ struct Callbacks {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Ic {
+struct ImePos {
     win: u32,
     x: i16,
     y: i16,
-    ic: xcb_xic_t,
 }
 
 /// [`PreeditInfo`] provides information about the text that is currently being edited by the IME.
@@ -276,9 +284,13 @@ impl<'a> std::fmt::Debug for PreeditInfo<'a> {
 pub struct ImeClient {
     conn: Option<Arc<xcb::Connection>>,
     im: *mut xcb_xim_t,
-    ic: Option<Ic>,
+    ic: Option<xcb_xic_t>,
     callbacks: Callbacks,
     input_style: InputStyle,
+    pos_cur: ImePos,
+    pos_req: ImePos,
+    is_processing_pos_update: bool,
+    pos_update_queued: bool,
 }
 
 impl ImeClient {
@@ -343,6 +355,10 @@ impl ImeClient {
             ic: None,
             callbacks: Callbacks::default(),
             input_style,
+            pos_cur: ImePos { win: 0, x: 0, y: 0 },
+            pos_req: ImePos { win: 0, x: 0, y: 0 },
+            is_processing_pos_update: false,
+            pos_update_queued: false,
         });
         let callbacks = xcb_xim_im_callback {
             commit_string: Some(commit_string_callback),
@@ -360,15 +376,12 @@ impl ImeClient {
         res
     }
 
-    fn try_open_ic(&mut self, win: u32, x: i16, y: i16) {
+    fn try_open_ic(&mut self) {
         if self.ic.is_some() {
             return;
         }
-        self.ic.insert(Ic { win, x, y, ic: 0 });
         let data: *mut ImeClient = self as _;
-        if !unsafe { xcb_xim_open(self.im, Some(open_callback), true, data as _) } {
-            self.ic.take();
-        }
+        unsafe { xcb_xim_open(self.im, Some(open_callback), true, data as _) };
     }
 
     /// Let the IME client process XCB's events.
@@ -394,23 +407,15 @@ impl ImeClient {
         if !unsafe { xcb_xim_filter_event(self.im, event.ptr as _) } {
             let mask = event.response_type() & !0x80;
             if (mask == xcb::ffi::XCB_KEY_PRESS) || (mask == xcb::ffi::XCB_KEY_RELEASE) {
-                let win = if mask == xcb::ffi::XCB_KEY_PRESS {
-                    unsafe { &*(event.ptr as *const xcb::ffi::xcb_key_press_event_t) }.event
-                } else {
-                    unsafe { &*(event.ptr as *const xcb::ffi::xcb_key_release_event_t) }.event
-                };
                 match self.ic {
-                    Some(ic) if ic.ic != 0 => {
+                    Some(ic) => {
                         unsafe {
-                            xcb_xim_forward_event(self.im, ic.ic, event.ptr as _);
+                            xcb_xim_forward_event(self.im, ic, event.ptr as _);
                         }
                         return true;
                     }
-                    Some(ic) => {
-                        self.try_open_ic(ic.win, ic.x, ic.y);
-                    }
-                    None => {
-                        self.try_open_ic(win, 0, 0);
+                    _ => {
+                        self.try_open_ic();
                     }
                 }
             }
@@ -423,59 +428,73 @@ impl ImeClient {
     /// Set the position of the IME window relative to the window specified by `win`. Coordinates
     /// increase from the top left corner of the window.
     ///
-    /// Return `true` if an update for the IME window position has been queued and `false` if no
-    /// update could be queued.
+    /// Return `true` if an update for the IME window position has been sent to the IME, `false` if
+    /// the update has been queued. If there is still an update request queued and this method is
+    /// called, the previously queued request is discarded in favor of the new one.
     pub fn update_pos(&mut self, win: u32, x: i16, y: i16) -> bool {
-        match &mut self.ic {
-            Some(ic) if ic.ic != 0 => {
-                let spot = xcb_point_t { x, y };
-                let nested = unsafe {
-                    xcb_xim_create_nested_list(
-                        self.im,
-                        XCB_XIM_XNSpotLocation,
-                        &spot,
-                        std::ptr::null_mut::<c_void>(),
-                    )
-                };
-                if win != ic.win {
-                    ic.win = win;
-                    let w = &mut ic.win as *mut _;
-                    unsafe {
-                        xcb_xim_set_ic_values(
-                            self.im,
-                            ic.ic,
-                            None,
-                            std::ptr::null_mut::<c_void>(),
-                            XCB_XIM_XNClientWindow,
-                            w,
-                            XCB_XIM_XNFocusWindow,
-                            w,
-                            XCB_XIM_XNPreeditAttributes,
-                            &nested,
-                            std::ptr::null_mut::<c_void>(),
-                        );
-                    }
-                } else {
-                    unsafe {
-                        xcb_xim_set_ic_values(
-                            self.im,
-                            ic.ic,
-                            None,
-                            std::ptr::null_mut::<c_void>(),
-                            XCB_XIM_XNPreeditAttributes,
-                            &nested,
-                            std::ptr::null_mut::<c_void>(),
-                        );
-                    }
+        self.pos_req = ImePos { win, x, y };
+        match self.ic {
+            Some(ic) => {
+                if self.is_processing_pos_update {
+                    self.pos_update_queued = true;
+                    return false;
                 }
-                unsafe { free(nested.data as _) };
+                self.send_pos_update(ic);
                 true
             }
             _ => {
-                self.try_open_ic(win, x, y);
+                self.try_open_ic();
                 false
             }
         }
+    }
+
+    fn send_pos_update(&mut self, ic: xcb_xic_t) {
+        self.is_processing_pos_update = true;
+        let spot = xcb_point_t {
+            x: self.pos_req.x,
+            y: self.pos_req.y,
+        };
+        let nested = unsafe {
+            xcb_xim_create_nested_list(
+                self.im,
+                XCB_XIM_XNSpotLocation,
+                &spot,
+                std::ptr::null_mut::<c_void>(),
+            )
+        };
+        if self.pos_req.win != self.pos_cur.win {
+            let w = &mut self.pos_req.win as *mut _;
+            unsafe {
+                xcb_xim_set_ic_values(
+                    self.im,
+                    ic,
+                    Some(update_pos_callback),
+                    self as *mut _ as _,
+                    XCB_XIM_XNClientWindow,
+                    w,
+                    XCB_XIM_XNFocusWindow,
+                    w,
+                    XCB_XIM_XNPreeditAttributes,
+                    &nested,
+                    std::ptr::null_mut::<c_void>(),
+                );
+            }
+        } else {
+            unsafe {
+                xcb_xim_set_ic_values(
+                    self.im,
+                    ic,
+                    Some(update_pos_callback),
+                    self as *mut _ as _,
+                    XCB_XIM_XNPreeditAttributes,
+                    &nested,
+                    std::ptr::null_mut::<c_void>(),
+                );
+            }
+        }
+        unsafe { free(nested.data as _) };
+        self.pos_cur = self.pos_req;
     }
 
     /// Set callback to be called once input composition is done.
@@ -551,8 +570,8 @@ impl Drop for ImeClient {
     fn drop(&mut self) {
         unsafe {
             match &mut self.ic {
-                Some(ic) if ic.ic != 0 => {
-                    xcb_xim_destroy_ic(self.im, ic.ic, None, std::ptr::null_mut());
+                Some(ic) => {
+                    xcb_xim_destroy_ic(self.im, *ic, None, std::ptr::null_mut());
                 }
                 _ => (),
             }
