@@ -569,11 +569,8 @@ impl ImeClient {
 impl Drop for ImeClient {
     fn drop(&mut self) {
         unsafe {
-            match &mut self.ic {
-                Some(ic) => {
-                    xcb_xim_destroy_ic(self.im, *ic, None, std::ptr::null_mut());
-                }
-                _ => (),
+            if let Some(ic) = self.ic {
+                xcb_xim_destroy_ic(self.im, ic, None, std::ptr::null_mut());
             }
             xcb_xim_close(self.im);
             xcb_xim_destroy(self.im);

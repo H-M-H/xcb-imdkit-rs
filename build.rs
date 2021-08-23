@@ -43,15 +43,14 @@ fn main() {
             println!("cargo:rustc-link-search={}", path.to_string_lossy());
         }
     } else {
-        if !std::path::Path::new("deps/xcb-imdkit/.gitignore").exists() {
-            if !std::process::Command::new("git")
+        if !std::path::Path::new("deps/xcb-imdkit/.gitignore").exists()
+            && !std::process::Command::new("git")
                 .args(&["submodule", "update", "--init"])
                 .status()
                 .expect("Failed to invoke git to init submodule.")
                 .success()
-            {
-                panic!("Initializing xcb-imdkit submodule failed!");
-            }
+        {
+            panic!("Initializing xcb-imdkit submodule failed!");
         }
 
         let xcb = pkg_config::Config::new()
@@ -60,7 +59,6 @@ fn main() {
         let xcb_util = pkg_config::Config::new()
             .probe("xcb-util")
             .expect("Could not find xcb-util!");
-
 
         for path in xcb.link_paths.iter().chain(xcb_util.link_paths.iter()) {
             println!("cargo:rustc-link-search={}", path.to_string_lossy());
