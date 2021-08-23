@@ -16,6 +16,10 @@ const XCB_IMDKIT_SRC: &[&str] = &[
 ];
 
 fn main() {
+    if env::var("DOCS_RS").is_ok() {
+        return;
+    }
+
     let use_system_lib = env::var("CARGO_FEATURE_USE_SYSTEM_LIB").is_ok();
 
     println!("cargo:rerun-if-changed=deps/build.sh");
