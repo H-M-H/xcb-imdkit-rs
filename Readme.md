@@ -1,4 +1,7 @@
 # xcb-imdkit-rs
+[![Build status](https://github.com/h-m-h/xcb-imdkit-rs/actions/workflows/build.yml/badge.svg)](https://github.com/h-m-h/xcb-imdkit-rs/actions)
+[![crates.io](https://img.shields.io/crates/v/xcb-imdkit.svg)](https://crates.io/crates/xcb-imdkit)
+[![Released API docs](https://docs.rs/xcb-imdkit/badge.svg)](https://docs.rs/xcb-imdkit)
 
 This library is a wrapper around [xcb-imdkit](https://github.com/fcitx/xcb-imdkit), providing an IME
 client.
