@@ -46,7 +46,7 @@ fn main() {
             println!("cargo:rustc-link-search={}", path.to_string_lossy());
         }
     } else {
-        if !std::path::Path::new("deps/xcb-imdkit/.gitignore").exists()
+        if !std::path::Path::new("deps/xcb-imdkit/src").exists()
             && !std::process::Command::new("git")
                 .args(&["submodule", "update", "--init"])
                 .status()
