@@ -1,6 +1,6 @@
 [package]
 name = "xcb-imdkit"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2018"
 license = "LGPL-2.1-only"
 description = "Wrapper around xcb-imdkit, providing an IME client for the XIM protocol using XCB"
