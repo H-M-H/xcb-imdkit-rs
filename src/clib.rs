@@ -26,4 +26,3 @@ impl Default for xcb_xim_im_callback {
         }
     }
 }
-

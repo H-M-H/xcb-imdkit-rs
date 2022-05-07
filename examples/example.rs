@@ -1,36 +1,31 @@
 use std::sync::Arc;
+use xcb::x::{Cw, EventMask, Window};
+use xcb::Event;
 use xcb_imdkit::{ImeClient, InputStyle};
 
-fn create_window(connection: Arc<xcb::Connection>, screen: &xcb::Screen) -> u32 {
-    let w = connection.generate_id();
-    let mask = xcb::EVENT_MASK_KEY_PRESS
-        | xcb::EVENT_MASK_KEY_RELEASE
-        | xcb::EVENT_MASK_FOCUS_CHANGE
-        | xcb::EVENT_MASK_VISIBILITY_CHANGE
-        | xcb::EVENT_MASK_STRUCTURE_NOTIFY;
-    let values = [
-        (xcb::CW_BACK_PIXEL, screen.white_pixel()),
-        (xcb::CW_EVENT_MASK, mask),
-    ];
-    xcb::create_window(
-        &connection,
-        xcb::COPY_FROM_PARENT as u8,
-        w,
-        screen.root(),
-        0,
-        0,
-        400,
-        400,
-        10,
-        xcb::WINDOW_CLASS_INPUT_OUTPUT as u16,
-        screen.root_visual(),
-        &values,
-    );
-    xcb::map_window(&connection, w);
-    unsafe {
-        xcb::ffi::xcb_flush(connection.get_raw_conn());
-    }
-    w
+fn create_window(connection: Arc<xcb::Connection>, screen: &xcb::x::Screen) -> Window {
+    let wid = connection.generate_id();
+    let mask = EventMask::KEY_PRESS
+        | EventMask::KEY_RELEASE
+        | EventMask::FOCUS_CHANGE
+        | EventMask::VISIBILITY_CHANGE
+        | EventMask::STRUCTURE_NOTIFY;
+    connection.send_request(&xcb::x::CreateWindow {
+        depth: xcb::x::COPY_FROM_PARENT as u8,
+        wid,
+        parent: screen.root(),
+        x: 0,
+        y: 0,
+        width: 400,
+        height: 400,
+        border_width: 10,
+        class: xcb::x::WindowClass::InputOutput,
+        visual: screen.root_visual(),
+        value_list: &[Cw::BackPixel(screen.white_pixel()), Cw::EventMask(mask)],
+    });
+    connection.send_request(&xcb::x::MapWindow { window: wid });
+    connection.flush().unwrap();
+    wid
 }
 
 fn main() {
@@ -49,23 +44,9 @@ fn main() {
         InputStyle::PREEDIT_CALLBACKS,
         None,
     );
-    ime.set_commit_string_cb(|win, input| println!("Win {}, got: {}", win, input));
+    ime.set_commit_string_cb(|win, input| println!("Win {:?}, got: {}", win, input));
     ime.set_forward_event_cb(|win, e| {
-        dbg!(
-            win,
-            e.response_type(),
-            e.detail(),
-            e.time(),
-            e.root(),
-            e.event(),
-            e.child(),
-            e.root_x(),
-            e.root_y(),
-            e.event_x(),
-            e.event_y(),
-            e.state(),
-            e.same_screen(),
-        );
+        eprintln!("win={:?} {:?}", win, e);
     });
     ime.set_preedit_draw_cb(|win, info| {
         dbg!(win, info);
@@ -79,22 +60,16 @@ fn main() {
     let mut focus_win = wins[0];
     let mut n = 0;
     loop {
-        let event = connection.wait_for_event();
-        if event.is_none() {
-            break;
-        }
-        let event = event.unwrap();
-        dbg!(event.response_type());
-
-        let event_type = event.response_type() & !0x80;
-        if xcb::FOCUS_IN == event_type {
-            let event: &xcb::FocusInEvent = unsafe { xcb::cast_event(&event) };
-            focus_win = event.event();
-            ime.update_pos(focus_win, 0, 0);
-        }
-
-        if xcb::CONFIGURE_NOTIFY == event_type {
-            ime.update_pos(focus_win, 0, 0);
+        let event = dbg!(connection.wait_for_event().unwrap());
+        match &event {
+            Event::X(xcb::x::Event::FocusIn(event)) => {
+                focus_win = event.event();
+                ime.update_pos(focus_win, 0, 0);
+            }
+            Event::X(xcb::x::Event::ConfigureNotify(_)) => {
+                ime.update_pos(focus_win, 0, 0);
+            }
+            _ => {}
         }
 
         println!(">>>>{}>>>>", n);
