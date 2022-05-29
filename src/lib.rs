@@ -278,6 +278,16 @@ impl<'a> PreeditInfo<'a> {
             )
         }
     }
+
+    /// Feedback array of preedit string.
+    pub fn feedback_array(&self) -> &[u32] {
+        unsafe {
+            std::slice::from_raw_parts(
+                self.inner.feedback_array.items,
+                self.inner.feedback_array.size as usize,
+            )
+        }
+    }
 }
 
 impl<'a> std::fmt::Debug for PreeditInfo<'a> {
