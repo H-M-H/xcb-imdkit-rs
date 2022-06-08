@@ -15,6 +15,8 @@ extern crate lazy_static;
 use std::os::raw::{c_char, c_void};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use xcb::x::Window;
+use xcb::{Raw, Xid, XidNew};
 
 use bitflags::bitflags;
 
@@ -121,7 +123,7 @@ extern "C" fn commit_string_callback(
 ) {
     let input = unsafe { xim_encoding_to_utf8(im, input, length as usize) };
     let ime = unsafe { ime_from_user_data(user_data) };
-    let win = ime.pos_req.win;
+    let win = unsafe { Window::new(ime.pos_req.win) };
     ime.callbacks.commit_string.as_mut().map(|f| f(win, &input));
 }
 
@@ -135,16 +137,30 @@ extern "C" fn update_pos_callback(_im: *mut xcb_xim_t, ic: xcb_xic_t, user_data:
     }
 }
 
+const XCB_KEY_PRESS: u8 = 2;
+const XCB_KEY_RELEASE: u8 = 3;
+
 extern "C" fn forward_event_callback(
     _im: *mut xcb_xim_t,
     _ic: xcb_xic_t,
     event: *mut xcb_key_press_event_t,
     user_data: *mut c_void,
 ) {
-    let ptr = event as *const xcb::ffi::xcb_key_press_event_t;
-    let event = xcb::KeyPressEvent { ptr: ptr as _ };
+    let pressed = unsafe { ((*event).response_type & 0x7f) == XCB_KEY_PRESS };
+    let ptr = event as *const xcb::ffi::xcb_generic_event_t;
+    let event = unsafe {
+        if pressed {
+            xcb::Event::X(xcb::x::Event::KeyPress(xcb::x::KeyPressEvent::from_raw(
+                ptr as _,
+            )))
+        } else {
+            xcb::Event::X(xcb::x::Event::KeyRelease(
+                xcb::x::KeyReleaseEvent::from_raw(ptr as _),
+            ))
+        }
+    };
     let ime = unsafe { ime_from_user_data(user_data) };
-    let win = ime.pos_req.win;
+    let win = unsafe { Window::new(ime.pos_req.win) };
     ime.callbacks.forward_event.as_mut().map(|f| f(win, &event));
 
     // xcb::KeyPressEvent has a Drop impl that will free `event`, but since we don't own it, we
@@ -154,7 +170,7 @@ extern "C" fn forward_event_callback(
 
 extern "C" fn preedit_start_callback(_im: *mut xcb_xim_t, _ic: xcb_xic_t, user_data: *mut c_void) {
     let ime = unsafe { ime_from_user_data(user_data) };
-    let win = ime.pos_req.win;
+    let win = unsafe { Window::new(ime.pos_req.win) };
     ime.callbacks.preedit_start.as_mut().map(|f| f(win));
 }
 
@@ -167,7 +183,7 @@ extern "C" fn preedit_draw_callback(
     let frame = unsafe { &*frame };
     let preedit_info = PreeditInfo { inner: frame, im };
     let ime = unsafe { ime_from_user_data(user_data) };
-    let win = ime.pos_req.win;
+    let win = unsafe { Window::new(ime.pos_req.win) };
     ime.callbacks
         .preedit_draw
         .as_mut()
@@ -176,7 +192,7 @@ extern "C" fn preedit_draw_callback(
 
 extern "C" fn preedit_done_callback(_im: *mut xcb_xim_t, _ic: xcb_xic_t, user_data: *mut c_void) {
     let ime = unsafe { ime_from_user_data(user_data) };
-    let win = ime.pos_req.win;
+    let win = unsafe { Window::new(ime.pos_req.win) };
     ime.callbacks.preedit_done.as_mut().map(|f| f(win));
 }
 
@@ -195,10 +211,10 @@ bitflags! {
     }
 }
 
-type StringCB = dyn for<'a> FnMut(u32, &'a str);
-type KeyPressCB = dyn for<'a> FnMut(u32, &'a xcb::KeyPressEvent);
-type PreeditDrawCB = dyn for<'a> FnMut(u32, PreeditInfo<'a>);
-type NotifyCB = dyn FnMut(u32);
+type StringCB = dyn for<'a> FnMut(Window, &'a str);
+type KeyPressCB = dyn for<'a> FnMut(Window, &'a xcb::Event);
+type PreeditDrawCB = dyn for<'a> FnMut(Window, PreeditInfo<'a>);
+type NotifyCB = dyn FnMut(Window);
 
 #[derive(Default)]
 struct Callbacks {
@@ -403,14 +419,15 @@ impl ImeClient {
     /// [`set_forward_event_cb`]: ImeClient::set_forward_event_cb
     /// [`set_commit_string_cb`]: ImeClient::set_commit_string_cb
     /// [`set_preedit_draw_cb`]: ImeClient::set_preedit_draw_cb
-    pub fn process_event(&mut self, event: &xcb::GenericEvent) -> bool {
-        if !unsafe { xcb_xim_filter_event(self.im, event.ptr as _) } {
-            let mask = event.response_type() & !0x80;
-            if (mask == xcb::ffi::XCB_KEY_PRESS) || (mask == xcb::ffi::XCB_KEY_RELEASE) {
+    pub fn process_event(&mut self, event: &xcb::Event) -> bool {
+        let raw = event.as_raw();
+        if !unsafe { xcb_xim_filter_event(self.im, raw as _) } {
+            let mask = unsafe { (*raw).response_type & !0x80 };
+            if (mask == XCB_KEY_PRESS) || (mask == XCB_KEY_RELEASE) {
                 match self.ic {
                     Some(ic) => {
                         unsafe {
-                            xcb_xim_forward_event(self.im, ic, event.ptr as _);
+                            xcb_xim_forward_event(self.im, ic, raw as _);
                         }
                         return true;
                     }
@@ -431,8 +448,12 @@ impl ImeClient {
     /// Return `true` if an update for the IME window position has been sent to the IME, `false` if
     /// the update has been queued. If there is still an update request queued and this method is
     /// called, the previously queued request is discarded in favor of the new one.
-    pub fn update_pos(&mut self, win: u32, x: i16, y: i16) -> bool {
-        self.pos_req = ImePos { win, x, y };
+    pub fn update_pos(&mut self, win: Window, x: i16, y: i16) -> bool {
+        self.pos_req = ImePos {
+            win: win.resource_id(),
+            x,
+            y,
+        };
         match self.ic {
             Some(ic) => {
                 if self.is_processing_pos_update {
@@ -504,7 +525,7 @@ impl ImeClient {
     /// [`update_pos`]: ImeClient::update_pos
     pub fn set_commit_string_cb<F>(&mut self, f: F)
     where
-        F: for<'a> FnMut(u32, &'a str) + 'static,
+        F: for<'a> FnMut(Window, &'a str) + 'static,
     {
         self.callbacks.commit_string = Some(Box::new(f));
     }
@@ -520,7 +541,7 @@ impl ImeClient {
     /// [`update_pos`]: ImeClient::update_pos
     pub fn set_forward_event_cb<F>(&mut self, f: F)
     where
-        F: for<'a> FnMut(u32, &'a xcb::KeyPressEvent) + 'static,
+        F: for<'a> FnMut(Window, &'a xcb::Event) + 'static,
     {
         self.callbacks.forward_event = Some(Box::new(f));
     }
@@ -533,7 +554,7 @@ impl ImeClient {
     /// [`update_pos`]: ImeClient::update_pos
     pub fn set_preedit_start_cb<F>(&mut self, f: F)
     where
-        F: FnMut(u32) + 'static,
+        F: FnMut(Window) + 'static,
     {
         self.callbacks.preedit_start = Some(Box::new(f));
     }
@@ -547,7 +568,7 @@ impl ImeClient {
     /// [`update_pos`]: ImeClient::update_pos
     pub fn set_preedit_draw_cb<F>(&mut self, f: F)
     where
-        F: for<'a> FnMut(u32, PreeditInfo<'a>) + 'static,
+        F: for<'a> FnMut(Window, PreeditInfo<'a>) + 'static,
     {
         self.callbacks.preedit_draw = Some(Box::new(f));
     }
@@ -560,7 +581,7 @@ impl ImeClient {
     /// [`update_pos`]: ImeClient::update_pos
     pub fn set_preedit_done_cb<F>(&mut self, f: F)
     where
-        F: FnMut(u32) + 'static,
+        F: FnMut(Window) + 'static,
     {
         self.callbacks.preedit_done = Some(Box::new(f));
     }
