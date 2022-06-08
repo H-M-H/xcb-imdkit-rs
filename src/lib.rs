@@ -297,6 +297,7 @@ impl<'a> std::fmt::Debug for PreeditInfo<'a> {
             .field("caret", &self.caret())
             .field("chg_first", &self.chg_first())
             .field("chg_length", &self.chg_length())
+            .field("feedback_array", &self.feedback_array())
             .field("text", &self.text());
         Ok(())
     }
