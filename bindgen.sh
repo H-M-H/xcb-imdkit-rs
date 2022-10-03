@@ -5,6 +5,7 @@ WHITELIST='(xcb|XCB)_(xim|XIM|im|xic)_.*|xcb_compound_text.*|xcb_utf8_to_compoun
 bindgen \
 	--allowlist-function "$WHITELIST" \
 	--allowlist-type "_xcb_im_style_t" \
+	--allowlist-type "xcb_im_feedback_t" \
 	--allowlist-var "$WHITELIST" \
 	--size_t-is-usize \
 	--no-layout-tests \

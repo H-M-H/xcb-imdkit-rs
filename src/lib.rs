@@ -211,6 +211,21 @@ bitflags! {
     }
 }
 
+bitflags! {
+    pub struct InputFeedback: u32 {
+        const DEFAULT = 0;
+        const REVERSE = xcb_im_feedback_t_XCB_XIM_REVERSE;
+        const UNDERLINE = xcb_im_feedback_t_XCB_XIM_UNDERLINE;
+        const HIGHLIGHT = xcb_im_feedback_t_XCB_XIM_HIGHLIGHT;
+        const PRIMARY = xcb_im_feedback_t_XCB_XIM_PRIMARY;
+        const SECONDARY = xcb_im_feedback_t_XCB_XIM_SECONDARY;
+        const TERTIARY = xcb_im_feedback_t_XCB_XIM_TERTIARY;
+        const VISIBLE_TO_FORWARD = xcb_im_feedback_t_XCB_XIM_VISIBLE_TO_FORWARD;
+        const VISIBLE_TO_BACKWORD = xcb_im_feedback_t_XCB_XIM_VISIBLE_TO_BACKWORD;
+        const VISIBLE_TO_CENTER = xcb_im_feedback_t_XCB_XIM_VISIBLE_TO_CENTER;
+    }
+}
+
 type StringCB = dyn for<'a> FnMut(Window, &'a str);
 type KeyPressCB = dyn for<'a> FnMut(Window, &'a xcb::Event);
 type PreeditDrawCB = dyn for<'a> FnMut(Window, PreeditInfo<'a>);
