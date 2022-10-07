@@ -211,6 +211,42 @@ bitflags! {
     }
 }
 
+bitflags! {
+    /// [`InputFeedback`] is feedback information to the preedit text.
+    /// Each element in [`PreeditInfo::feedback_array`] is a bitmask represented by a value of [`InputFeedback`].
+    pub struct InputFeedback: u32 {
+        /// By default the preedit text should be drawn in normal manner.
+        const DEFAULT = 0;
+
+        /// The preedit text should be drawn by swapping the foreground and background colors used to draw normal, unhighlighted characters.
+        const REVERSE = xcb_im_feedback_t_XCB_XIM_REVERSE;
+
+        /// The preedit text should be underlined.
+        const UNDERLINE = xcb_im_feedback_t_XCB_XIM_UNDERLINE;
+
+        /// The preedit text should be drawn in some unique manner that must be different from REVERSE and UNDERLINE.
+        const HIGHLIGHT = xcb_im_feedback_t_XCB_XIM_HIGHLIGHT;
+
+        /// The preedit text should be drawn in some unique manner that must be different from REVERSE and UNDERLINE.
+        const PRIMARY = xcb_im_feedback_t_XCB_XIM_PRIMARY;
+
+        /// The preedit text should be drawn in some unique manner that must be different from REVERSE and UNDERLINE.
+        const SECONDARY = xcb_im_feedback_t_XCB_XIM_SECONDARY;
+
+        /// The preedit text should be drawn in some unique manner that must be different from REVERSE and UNDERLINE.
+        const TERTIARY = xcb_im_feedback_t_XCB_XIM_TERTIARY;
+
+        /// The preedit text is preferably displayed in the primary draw direction from the caret position in the preedit area forward.
+        const VISIBLE_TO_FORWARD = xcb_im_feedback_t_XCB_XIM_VISIBLE_TO_FORWARD;
+
+        /// The preedit text is preferably displayed from the caret position in the preedit area backward, relative to the primary draw direction.
+        const VISIBLE_TO_BACKWORD = xcb_im_feedback_t_XCB_XIM_VISIBLE_TO_BACKWORD;
+
+        /// The preedit text is preferably displayed with the caret position in the preedit area centered.
+        const VISIBLE_TO_CENTER = xcb_im_feedback_t_XCB_XIM_VISIBLE_TO_CENTER;
+    }
+}
+
 type StringCB = dyn for<'a> FnMut(Window, &'a str);
 type KeyPressCB = dyn for<'a> FnMut(Window, &'a xcb::Event);
 type PreeditDrawCB = dyn for<'a> FnMut(Window, PreeditInfo<'a>);
@@ -279,7 +315,8 @@ impl<'a> PreeditInfo<'a> {
         }
     }
 
-    /// Feedback array of preedit string.
+    /// Feedback information to each character of preedit text.
+    /// Refer to [`InputFeedback`] for more details.
     pub fn feedback_array(&self) -> &[u32] {
         unsafe {
             std::slice::from_raw_parts(
