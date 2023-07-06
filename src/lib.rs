@@ -111,6 +111,14 @@ unsafe fn ime_from_user_data(user_data: *mut c_void) -> &'static mut ImeClient {
     &mut *(user_data as *mut ImeClient)
 }
 
+extern "C" fn disconnected_callback(
+    _im: *mut xcb_xim_t,
+    user_data: *mut c_void,
+) {
+    let ime = unsafe { ime_from_user_data(user_data) };
+    ime.ic.take();
+}
+
 extern "C" fn commit_string_callback(
     im: *mut xcb_xim_t,
     _ic: xcb_xic_t,
@@ -388,6 +396,7 @@ impl ImeClient {
             pos_update_queued: false,
         });
         let callbacks = xcb_xim_im_callback {
+            disconnected: Some(disconnected_callback),
             commit_string: Some(commit_string_callback),
             forward_event: Some(forward_event_callback),
             preedit_start: Some(preedit_start_callback),
